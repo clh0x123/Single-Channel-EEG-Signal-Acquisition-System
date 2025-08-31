@@ -1,11 +1,16 @@
 import os
 import sys
+import time
+
+import numpy as np
 from PyQt5 import uic
 from PyQt5.QtCore import QTimer
-from PyQt5.QtWidgets import (QApplication, QMainWindow, QPushButton, QTextEdit, QVBoxLayout, QHBoxLayout, QSizePolicy)
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QPushButton, QTextEdit, QVBoxLayout, QHBoxLayout, QSizePolicy,
+                             QInputDialog, QFileDialog)
+
+from services.eeg_data_coordinator import EEGDataCoordinator
 from services.serial_manager import SerialManager
 from services.tgam_simulator import TGAMSimulator
-from services.eeg_data_coordinator import EEGDataCoordinator
 from widgets.combined_eeg_plot_widget import CombinedEEGPlotWidget
 
 
@@ -464,7 +469,6 @@ class MainWindow(QMainWindow):
     
     def adjust_y_range(self):
         """调整Y轴范围"""
-        from PyQt5.QtWidgets import QInputDialog
         min_val, ok1 = QInputDialog.getDouble(self, "调整Y轴范围", "最小值 (μV):", -100, -1000, 1000)
         if ok1:
             max_val, ok2 = QInputDialog.getDouble(self, "调整Y轴范围", "最大值 (μV):", 100, -1000, 1000)
@@ -566,14 +570,14 @@ class MainWindow(QMainWindow):
             self.receiveText.append(f"图像已保存到: {file_path}")
 
     def save_eeg_data(self):
-        """保存EEG数据到文件"""
+        """保存EEG数据到.txt文件"""
         from PyQt5.QtWidgets import QFileDialog
-        import numpy as np
         import os
+        import time
 
         # 获取文件名
         file_path, _ = QFileDialog.getSaveFileName(
-            self, "保存EEG数据", "eeg_data", "EEG Files (*.eeg);;BrainVision Files (*.vhdr);;All Files (*)"
+            self, "保存EEG数据", "eeg_data.txt", "Text Files (*.txt);;All Files (*)"
         )
         
         if file_path:
@@ -583,53 +587,27 @@ class MainWindow(QMainWindow):
                 self.receiveText.append("没有可保存的EEG数据")
                 return
 
-            # 保存为.eeg文件
-            if file_path.endswith('.eeg'):
-                # 简单的二进制格式保存
-                with open(file_path, 'wb') as f:
-                    # 写入采样率
-                    np.array([self.eeg_data_coordinator.sample_rate], dtype=np.int32).tofile(f)
-                    # 写入数据长度
-                    np.array([len(raw_data)], dtype=np.int32).tofile(f)
-                    # 写入数据
-                    np.array(raw_data, dtype=np.float32).tofile(f)
-                self.receiveText.append(f"EEG数据已保存到: {file_path}")
+            # 获取采样率
+            sample_rate = self.eeg_data_coordinator.sample_rate
+            num_samples = len(raw_data)
 
-            # 保存为.vhdr文件 (BrainVision格式)
-            elif file_path.endswith('.vhdr'):
-                # 创建.vhdr文件
-                with open(file_path, 'w') as f:
-                    f.write("Brain Vision Data Exchange Header File Version 1.0\n")
-                    f.write(f"DataFile={os.path.basename(file_path).replace('.vhdr', '.eeg')}\n")
-                    f.write(f"MarkerFile={os.path.basename(file_path).replace('.vhdr', '.vmrk')}\n")
-                    f.write("DataType=BINARY\n")
-                    f.write("DataFormat=IEEE_FLOAT_32\n")
-                    f.write(f"SamplingInterval={1000/self.eeg_data_coordinator.sample_rate}\n")
-                    f.write("Channels=1\n")
-                    f.write("Ch1=EEG, 1, uV\n")
+            # 保存为.txt文件
+            with open(file_path, 'w') as f:
+                # 写入文件头信息
+                f.write(f"EEG Data File\n")
+                f.write(f"Created on: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"Sample Rate: {sample_rate}Hz\n")
+                f.write(f"Number of Samples: {num_samples}\n")
+                f.write("\n")
+                f.write("Sample Index,EEG Value (uV)\n")
 
-                # 创建.eeg文件
-                eeg_file = file_path.replace('.vhdr', '.eeg')
-                with open(eeg_file, 'wb') as f:
-                    np.array(raw_data, dtype=np.float32).tofile(f)
+                # 写入数据
+                for i, value in enumerate(raw_data):
+                    f.write(f"{i},{value}\n")
 
-                # 创建空的.vmrk文件
-                vmrk_file = file_path.replace('.vhdr', '.vmrk')
-                with open(vmrk_file, 'w') as f:
-                    f.write("Brain Vision Data Exchange Marker File Version 1.0\n")
-                    f.write("[Marker Infos]\n")
-                    f.write("; Each entry: Mk<Marker number>=<Type>,<Description>,<Position in data points>,<Duration in data points>,<Channel number>,<Date>,<Time>\n")
-
-                self.receiveText.append(f"BrainVision数据已保存到: {file_path}")
-
-            else:
-                # 默认为.eeg格式
-                file_path += '.eeg'
-                with open(file_path, 'wb') as f:
-                    np.array([self.eeg_data_coordinator.sample_rate], dtype=np.int32).tofile(f)
-                    np.array([len(raw_data)], dtype=np.int32).tofile(f)
-                    np.array(raw_data, dtype=np.float32).tofile(f)
-                self.receiveText.append(f"EEG数据已保存到: {file_path}")
+            self.receiveText.append(f"EEG数据已保存到: {file_path}")
+            self.receiveText.append(f"格式: 文本文件 (.txt)")
+            self.receiveText.append(f"采样率: {sample_rate}Hz, 采样点数: {num_samples}")
     
     def closeEvent(self, event):
         """关闭事件"""
