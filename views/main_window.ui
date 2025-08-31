@@ -18,7 +18,7 @@
     <item>
      <widget class="QTabWidget" name="tabWidget">
       <property name="currentIndex">
-       <number>1</number>
+       <number>0</number>
       </property>
       <widget class="QWidget" name="serialTab">
        <attribute name="title">
@@ -371,16 +371,16 @@
                </widget>
               </item>
               <item>
-               <widget class="QPushButton" name="startSimButton">
+               <widget class="QPushButton" name="toggleSimButton">
                 <property name="text">
                  <string>开始模拟</string>
                 </property>
                </widget>
               </item>
               <item>
-               <widget class="QPushButton" name="stopSimButton">
+               <widget class="QPushButton" name="saveDataButton">
                 <property name="text">
-                 <string>停止模拟</string>
+                 <string>保存数据</string>
                 </property>
                </widget>
               </item>
@@ -461,7 +461,7 @@
                <item>
                 <widget class="QCheckBox" name="showTimeCheck">
                  <property name="text">
-                  <string>显示时间</string>
+                  <string>显示时间戳</string>
                  </property>
                 </widget>
                </item>
@@ -529,7 +529,6 @@
     <string>刷新TGAM端口</string>
    </property>
   </action>
-
  </widget>
  <resources/>
  <connections/>

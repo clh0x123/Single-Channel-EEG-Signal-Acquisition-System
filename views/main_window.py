@@ -5,7 +5,8 @@ from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QPushButton, QTextEdit, QVBoxLayout, QHBoxLayout, QSizePolicy)
 from services.serial_manager import SerialManager
 from services.tgam_simulator import TGAMSimulator
-from widgets.realtime_plot_widget import RealtimePlotWidget
+from services.eeg_data_coordinator import EEGDataCoordinator
+from widgets.combined_eeg_plot_widget import CombinedEEGPlotWidget
 
 
 class MainWindow(QMainWindow):
@@ -27,6 +28,9 @@ class MainWindow(QMainWindow):
         
         # 初始化TGAM模拟器
         self.tgam_simulator = TGAMSimulator(serial_manager=self.tgam_serial_manager)
+        
+        # 初始化EEG数据协调器
+        self.eeg_data_coordinator = EEGDataCoordinator(sample_rate=512, buffer_size=1000)
         
         # 设置选项卡界面
         self.create_tabbed_interface()
@@ -60,22 +64,16 @@ class MainWindow(QMainWindow):
         # 获取绘图选项卡
         self.plot_tab = self.plotTab
         
-        # 创建绘图控件
-        self.plot_widget = RealtimePlotWidget(self.plot_tab)
+        # 创建组合EEG绘图控件（支持多频段显示）
+        self.plot_widget = CombinedEEGPlotWidget(self.plot_tab)
         # 设置控件大小策略为扩展，使其能填满可用空间
         self.plot_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        # 设置图表标题
-        self.plot_widget.plot_widget.setTitle("脑电图信号", color='k', size='12pt')
-        # 设置网格
-        self.plot_widget.plot_widget.showGrid(x=True, y=True, alpha=0.3)
-        # 设置Y轴范围
-        self.plot_widget.set_y_range(-100, 100)
         
         # 创建控制按钮布局
         control_layout = QHBoxLayout()
         
         self.clearPlotButton = QPushButton("清除绘图")
-        self.clearPlotButton.clicked.connect(self.plot_widget.clear_plot)
+        self.clearPlotButton.clicked.connect(self.plot_widget.clear_all_plots)
         
         self.yRangeButton = QPushButton("调整Y轴范围")
         self.yRangeButton.clicked.connect(self.adjust_y_range)
@@ -94,7 +92,7 @@ class MainWindow(QMainWindow):
         control_layout.addWidget(self.pauseButton)
         
         # 初始状态设置为暂停
-        self.plot_widget.pause_plot()
+        self.plot_widget.toggle_pause_all()
         
         # 使用plot_tab现有的布局
         plot_tab_layout = self.plot_tab.layout()
@@ -120,8 +118,32 @@ class MainWindow(QMainWindow):
                         if sub_widget is not None:
                             sub_widget.hide()
 
+        # 创建可见性控制布局
+        visibility_layout = QHBoxLayout()
+        
+        # 添加原始EEG信号可见性控制
+        self.raw_eeg_checkbox = QPushButton("原始EEG")
+        self.raw_eeg_checkbox.setCheckable(True)
+        self.raw_eeg_checkbox.setChecked(True)
+        self.raw_eeg_checkbox.clicked.connect(self.toggle_raw_eeg_visibility)
+        visibility_layout.addWidget(self.raw_eeg_checkbox)
+        
+        # 添加各频段可见性控制
+        self.band_checkboxes = {}
+        for band_name in self.plot_widget.get_band_names():
+            band_info = self.plot_widget.get_band_info(band_name)
+            checkbox = QPushButton(band_info.get('name', band_name))
+            checkbox.setCheckable(True)
+            checkbox.setChecked(True)
+            checkbox.clicked.connect(lambda checked, bn=band_name: self.toggle_band_visibility(bn, checked))
+            self.band_checkboxes[band_name] = checkbox
+            visibility_layout.addWidget(checkbox)
+        
+        visibility_layout.addStretch()
+        
         # 添加绘图控件和控制布局
         plot_tab_layout.addWidget(self.plot_widget)
+        plot_tab_layout.addLayout(visibility_layout)
         plot_tab_layout.addLayout(control_layout)
 
         # 设置拉伸因子，让绘图控件占满大部分空间
@@ -163,20 +185,31 @@ class MainWindow(QMainWindow):
         self.refreshButton.clicked.connect(self.refresh_receiver_ports)
         self.clearButton.clicked.connect(self.clear_receive_area)
         
+        # 连接UI中的保存数据按钮
+        self.saveDataButton.clicked.connect(self.save_eeg_data)
+        
         # TGAM控制按钮
         self.tgamOpenCloseButton.clicked.connect(self.toggle_tgam_port)
         self.tgamRefreshButton.clicked.connect(self.refresh_tgam_ports)
-        self.startSimButton.clicked.connect(self.start_tgam_simulation)
-        self.stopSimButton.clicked.connect(self.stop_tgam_simulation)
+        
+        # 连接模拟切换按钮
+        self.toggleSimButton.clicked.connect(self.toggle_tgam_simulation)
+        # 初始化切换按钮状态
+        self.update_toggle_button_state()
         
         # 显示设置
+        self.showTimeCheck.stateChanged.connect(self.on_show_time_changed)
         self.asciiRadio.currentTextChanged.connect(self.on_display_format_changed)
         self.autoWrapCheck.toggled.connect(self.on_auto_wrap_changed)
         self.showTimeCheck.toggled.connect(self.on_show_time_changed)
         
-        # 将TGAM串口管理器的解析数据信号连接到绘图组件
-        self.tgam_serial_manager.parsed_data_received.connect(self.plot_widget.update_data)
-        self.receiver_serial_manager.parsed_data_received.connect(self.plot_widget.update_data)
+        # 将数据从串口管理器传输到EEG数据协调器
+        self.tgam_serial_manager.parsed_data_received.connect(self.eeg_data_coordinator.process_eeg_data)
+        self.receiver_serial_manager.parsed_data_received.connect(self.eeg_data_coordinator.process_eeg_data)
+        
+        # 将处理后的数据从EEG数据协调器传输到绘图组件
+        self.eeg_data_coordinator.raw_eeg_updated.connect(self.plot_widget.update_raw_eeg)
+        self.eeg_data_coordinator.frequency_bands_updated.connect(self.plot_widget.update_frequency_bands)
     
     def refresh_receiver_ports(self):
         """刷新接收端端口列表"""
@@ -193,10 +226,10 @@ class MainWindow(QMainWindow):
     def toggle_plot_and_simulation(self):
         """同时切换绘图和TGAM模拟的暂停/恢复状态"""
         # 切换绘图状态
-        self.plot_widget.toggle_pause()
+        is_paused = self.plot_widget.toggle_pause_all()
 
         # 更新按钮文本
-        if self.plot_widget.is_paused:
+        if is_paused:
             self.pauseButton.setText("开始")
             # 停止模拟
             if hasattr(self, 'tgam_simulator') and self.tgam_simulator.running:
@@ -205,7 +238,43 @@ class MainWindow(QMainWindow):
             self.pauseButton.setText("暂停")
             # 启动模拟
             if hasattr(self, 'tgam_simulator') and not self.tgam_simulator.running:
-                self.start_tgam_simulation()
+                # 确保TGAM串口已打开
+                if not self.tgam_serial_manager.is_connected():
+                    # 尝试自动打开TGAM串口
+                    if self.tgamPortCombo.count() > 0:
+                        port = self.tgamPortCombo.currentText()
+                        baudrate = int(self.tgamBaudrateCombo.currentText())
+                        databits = int(self.tgamDatabitsCombo.currentText())
+                        parity = self.tgamParityCombo.currentText()
+                        stopbits = float(self.tgamStopbitsCombo.currentText())
+
+                        # 设置串口参数
+                        self.tgam_serial_manager.set_port(port)
+                        self.tgam_serial_manager.set_baudrate(baudrate)
+                        self.tgam_serial_manager.databits = databits
+                        self.tgam_serial_manager.parity = parity
+                        self.tgam_serial_manager.stopbits = stopbits
+                        self.tgam_serial_manager.flowcontrol = "None"
+
+                        if self.tgam_serial_manager.open_serial():
+                            self.tgamOpenCloseButton.setText("关闭TGAM串口")
+                            self.tgamStatusLabel.setText("TGAM串口状态: 打开")
+                            self.tgamStatusLabel.setStyleSheet("color: green;")
+                            # 更新TGAM模拟器的参数
+                            self.tgam_simulator.port = port
+                            self.tgam_simulator.baudrate = baudrate
+                            # 启动模拟
+                            self.start_tgam_simulation()
+                        else:
+                            self.receiveText.append("无法打开TGAM串口，模拟启动失败")
+                    else:
+                        self.receiveText.append("未找到可用的TGAM串口，模拟启动失败")
+                else:
+                    # TGAM串口已打开，直接启动模拟
+                    self.start_tgam_simulation()
+        # 更新切换按钮状态
+        self.update_toggle_button_state()
+        return is_paused
     
     def toggle_receiver_port(self):
         """切换接收端串口状态"""
@@ -298,8 +367,10 @@ class MainWindow(QMainWindow):
     
     def on_display_format_changed(self, format_type):
         """显示格式改变"""
-        # 这里可以添加格式转换逻辑
-        pass
+        # 清除当前显示内容，以便新的格式生效
+        self.clear_receive_area()
+        # 刷新状态显示
+        self.update_status()
     
     def on_auto_wrap_changed(self, checked):
         """自动换行设置改变"""
@@ -309,30 +380,36 @@ class MainWindow(QMainWindow):
             self.receiveText.setLineWrapMode(QTextEdit.NoWrap)
     
     def on_show_time_changed(self, checked):
-        """显示时间设置改变"""
-        # 这里可以添加时间显示逻辑
-        pass
+        """显示时间戳设置改变"""
+        # 记录时间戳显示状态变化
+        if checked:
+            self.receiveText.append("已启用时间戳显示")
+        else:
+            self.receiveText.append("已禁用时间戳显示")
+        # 清除当前显示内容，以便新的设置生效
+        self.clear_receive_area()
+        # 刷新状态显示
+        self.update_status()
     
     def on_raw_data_received(self, data):
         """接收原始数据"""
+        timestamp_str = ""
         if self.showTimeCheck.isChecked():
             from datetime import datetime
             timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-            data_str = f"[{timestamp}] {data}"
-        else:
-            data_str = data
+            timestamp_str = f"[{timestamp}] "
         
         if self.asciiRadio.currentText() == "Hex":
             # 转换为十六进制显示
             hex_data = ' '.join([f"{b:02X}" for b in data])
-            self.receiveText.append(hex_data)
+            self.receiveText.append(f"{timestamp_str}{hex_data}")
         else:
             # ASCII显示
             try:
                 ascii_data = data.decode('ascii', errors='replace')
-                self.receiveText.append(ascii_data)
+                self.receiveText.append(f"{timestamp_str}{ascii_data}")
             except:
-                self.receiveText.append(str(data))
+                self.receiveText.append(f"{timestamp_str}{str(data)}")
         
         # 自动滚动到底部
         self.receiveText.ensureCursorVisible()
@@ -356,8 +433,7 @@ class MainWindow(QMainWindow):
             return
         
         print(f"接收到EEG数据: {parsed_data['eeg_uv']}")
-        # 将数据传递给绘图组件
-        self.plot_widget.update_data(parsed_data)
+        # 数据已通过EEGDataCoordinator传递给绘图组件，这里不需要额外调用
     
     def on_connection_error(self, error_msg):
         """处理连接错误"""
@@ -394,6 +470,85 @@ class MainWindow(QMainWindow):
             max_val, ok2 = QInputDialog.getDouble(self, "调整Y轴范围", "最大值 (μV):", 100, -1000, 1000)
             if ok2:
                 self.plot_widget.set_y_range(min_val, max_val)
+        
+    def toggle_raw_eeg_visibility(self):
+        """切换原始EEG信号的可见性"""
+        visible = self.raw_eeg_checkbox.isChecked()
+        self.plot_widget.set_raw_eeg_visibility(visible)
+
+    def start_tgam_simulation(self):
+        """开始TGAM模拟"""
+        if self.tgam_serial_manager.is_connected():
+            if self.tgam_simulator.start():
+                self.receiveText.append("开始TGAM模拟")
+                # 更新切换按钮状态
+                self.update_toggle_button_state()
+                # 如果绘图是暂停状态，自动开始
+                if hasattr(self.plot_widget, 'is_paused') and self.plot_widget.is_paused:
+                    self.toggle_plot_and_simulation()
+            else:
+                self.receiveText.append("TGAM模拟启动失败")
+        else:
+            self.receiveText.append("请先打开TGAM串口")
+
+    def stop_tgam_simulation(self):
+        """停止TGAM模拟"""
+        self.tgam_simulator.stop()
+        self.receiveText.append("停止TGAM模拟")
+        # 更新切换按钮状态
+        self.update_toggle_button_state()
+        # 如果绘图不是暂停状态，自动暂停
+        if hasattr(self.plot_widget, 'is_paused') and not self.plot_widget.is_paused:
+            self.toggle_plot_and_simulation()
+        
+    def toggle_band_visibility(self, band_name, visible):
+        """切换特定频段的可见性
+        
+        Args:
+            band_name: 频段名称
+            visible: 是否可见
+        """
+        self.plot_widget.set_band_visibility(band_name, visible)
+        
+    def toggle_tgam_simulation(self):
+        """切换TGAM模拟状态"""
+        if self.tgam_simulator.running:
+            self.stop_tgam_simulation()
+        else:
+            self.start_tgam_simulation()
+        
+    def update_toggle_button_state(self):
+        """更新切换按钮状态"""
+        if self.tgam_simulator.running:
+            self.toggleSimButton.setText("停止模拟")
+        else:
+            self.toggleSimButton.setText("开始模拟")
+        
+    def update_status(self):
+        """更新状态显示"""
+        # 更新接收端串口状态
+        if self.receiver_serial_manager.is_connected():
+            self.statusLabel.setText("接收端串口状态: 打开")
+            self.statusLabel.setStyleSheet("color: green;")
+        else:
+            self.statusLabel.setText("接收端串口状态: 关闭")
+            self.statusLabel.setStyleSheet("color: red;")
+        
+        # 更新TGAM串口状态
+        if self.tgam_serial_manager.is_connected():
+            self.tgamStatusLabel.setText("TGAM串口状态: 打开")
+            self.tgamStatusLabel.setStyleSheet("color: green;")
+        else:
+            self.tgamStatusLabel.setText("TGAM串口状态: 关闭")
+            self.tgamStatusLabel.setStyleSheet("color: red;")
+        
+        # 更新接收统计
+        # 由于serial_manager.py中没有get_received_bytes方法，这里简单处理
+        received_bytes = len(self.receiveText.toPlainText())
+        self.receivedStatsLabel.setText(f"接收字节: {received_bytes}")
+        
+        # 更新切换按钮状态
+        self.update_toggle_button_state()
     
     def save_plot_image(self):
         """保存绘图图像"""
@@ -406,9 +561,75 @@ class MainWindow(QMainWindow):
         
         if file_path:
             # 捕获绘图区域的图像
-            pixmap = self.plot_widget.plot_widget.grab()
+            pixmap = self.plot_widget.grab()
             pixmap.save(file_path)
             self.receiveText.append(f"图像已保存到: {file_path}")
+
+    def save_eeg_data(self):
+        """保存EEG数据到文件"""
+        from PyQt5.QtWidgets import QFileDialog
+        import numpy as np
+        import os
+
+        # 获取文件名
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "保存EEG数据", "eeg_data", "EEG Files (*.eeg);;BrainVision Files (*.vhdr);;All Files (*)"
+        )
+        
+        if file_path:
+            # 获取EEG数据
+            raw_data = self.eeg_data_coordinator.frequency_band_processor.get_raw_eeg_data()
+            if not raw_data:
+                self.receiveText.append("没有可保存的EEG数据")
+                return
+
+            # 保存为.eeg文件
+            if file_path.endswith('.eeg'):
+                # 简单的二进制格式保存
+                with open(file_path, 'wb') as f:
+                    # 写入采样率
+                    np.array([self.eeg_data_coordinator.sample_rate], dtype=np.int32).tofile(f)
+                    # 写入数据长度
+                    np.array([len(raw_data)], dtype=np.int32).tofile(f)
+                    # 写入数据
+                    np.array(raw_data, dtype=np.float32).tofile(f)
+                self.receiveText.append(f"EEG数据已保存到: {file_path}")
+
+            # 保存为.vhdr文件 (BrainVision格式)
+            elif file_path.endswith('.vhdr'):
+                # 创建.vhdr文件
+                with open(file_path, 'w') as f:
+                    f.write("Brain Vision Data Exchange Header File Version 1.0\n")
+                    f.write(f"DataFile={os.path.basename(file_path).replace('.vhdr', '.eeg')}\n")
+                    f.write(f"MarkerFile={os.path.basename(file_path).replace('.vhdr', '.vmrk')}\n")
+                    f.write("DataType=BINARY\n")
+                    f.write("DataFormat=IEEE_FLOAT_32\n")
+                    f.write(f"SamplingInterval={1000/self.eeg_data_coordinator.sample_rate}\n")
+                    f.write("Channels=1\n")
+                    f.write("Ch1=EEG, 1, uV\n")
+
+                # 创建.eeg文件
+                eeg_file = file_path.replace('.vhdr', '.eeg')
+                with open(eeg_file, 'wb') as f:
+                    np.array(raw_data, dtype=np.float32).tofile(f)
+
+                # 创建空的.vmrk文件
+                vmrk_file = file_path.replace('.vhdr', '.vmrk')
+                with open(vmrk_file, 'w') as f:
+                    f.write("Brain Vision Data Exchange Marker File Version 1.0\n")
+                    f.write("[Marker Infos]\n")
+                    f.write("; Each entry: Mk<Marker number>=<Type>,<Description>,<Position in data points>,<Duration in data points>,<Channel number>,<Date>,<Time>\n")
+
+                self.receiveText.append(f"BrainVision数据已保存到: {file_path}")
+
+            else:
+                # 默认为.eeg格式
+                file_path += '.eeg'
+                with open(file_path, 'wb') as f:
+                    np.array([self.eeg_data_coordinator.sample_rate], dtype=np.int32).tofile(f)
+                    np.array([len(raw_data)], dtype=np.int32).tofile(f)
+                    np.array(raw_data, dtype=np.float32).tofile(f)
+                self.receiveText.append(f"EEG数据已保存到: {file_path}")
     
     def closeEvent(self, event):
         """关闭事件"""
