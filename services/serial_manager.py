@@ -1,20 +1,15 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-"""
-串口管理模块
-遵循SOLID原则，负责处理所有串口相关的功能
-"""
-
 import time
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, pyqtSlot
+from abc import ABC, abstractmethod
+from typing import List, Optional, Dict, Any
+
 import serial
+import serial.tools.list_ports
+from PyQt5.QtCore import QThread, pyqtSignal
 from serial import PARITY_NONE, PARITY_EVEN, PARITY_ODD, PARITY_MARK, PARITY_SPACE
 from serial import STOPBITS_ONE, STOPBITS_ONE_POINT_FIVE, STOPBITS_TWO
-import serial.tools.list_ports
-from typing import List, Optional, Dict, Any
-from abc import ABC, abstractmethod
-from .tgam_parser import TGAMDataStreamParser
+
 from .data_processor import DataProcessorManager
+from .tgam_parser import TGAMDataStreamParser
 
 
 class ISerialPort(ABC):
@@ -144,7 +139,7 @@ class WindowsPortEnumerator(IPortEnumerator):
 
 
 class SerialManager(QThread):
-    """串口管理类，遵循SOLID原则"""
+    """串口管理类"""
     
     # 信号定义
     data_received = pyqtSignal(bytes)
@@ -311,13 +306,12 @@ class SerialManager(QThread):
                 return False
                 
         except Exception as e:
-            error_msg = self._get_friendly_error_message(str(e))
+            error_msg = self._get_error_message(str(e))
             print(f"串口连接错误: {error_msg}")
             self.connection_error.emit(error_msg)
             return False
     
-    def _get_friendly_error_message(self, error_str: str) -> str:
-        """将系统错误转换为用户友好的错误信息"""
+    def _get_error_message(self, error_str: str) -> str:
         if "信号灯超时" in error_str or "timeout" in error_str.lower():
             return "串口连接超时，可能是蓝牙设备连接不稳定"
         elif "拒绝访问" in error_str or "permission" in error_str.lower():

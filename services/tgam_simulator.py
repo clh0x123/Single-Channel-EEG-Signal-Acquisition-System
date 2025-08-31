@@ -2,8 +2,8 @@ import random
 import time
 import threading
 
+
 class TGAMSimulator:
-    
     def __init__(self, port="COM2", baudrate=57600, serial_manager=None):
         """
         TGAM 模拟器

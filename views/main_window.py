@@ -1,18 +1,12 @@
-import sys
 import os
-from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
-                             QHBoxLayout, QFormLayout, QGroupBox, QLabel, 
-                             QComboBox, QPushButton, QTextEdit, QCheckBox, 
-                             QSplitter, QTabWidget, QVBoxLayout, QHBoxLayout, QMessageBox, QSizePolicy)
-from PyQt5.QtCore import QThread, pyqtSignal, QTimer, Qt, QRect, pyqtSlot
-from PyQt5 import QtCore
-from PyQt5.QtGui import QFont
+import sys
 from PyQt5 import uic
-
-# 导入重构后的服务组件
+from PyQt5.QtCore import QTimer
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QPushButton, QTextEdit, QVBoxLayout, QHBoxLayout, QSizePolicy)
 from services.serial_manager import SerialManager
 from services.tgam_simulator import TGAMSimulator
 from widgets.realtime_plot_widget import RealtimePlotWidget
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -34,15 +28,8 @@ class MainWindow(QMainWindow):
         # 初始化TGAM模拟器
         self.tgam_simulator = TGAMSimulator(serial_manager=self.tgam_serial_manager)
         
-        # 初始化实时绘图组件
-        self.plot_widget = RealtimePlotWidget()
-        
         # 设置选项卡界面
         self.create_tabbed_interface()
-        
-        # 确保plot_widget被正确添加到UI
-        if hasattr(self, 'pauseButton'):
-            self.pauseButton.clicked.connect(self.plot_widget.toggle_pause)
         
         # 设置默认值
         self.setup_default_values()
@@ -102,9 +89,12 @@ class MainWindow(QMainWindow):
         control_layout.addWidget(self.savePlotButton)
         
         # 创建暂停按钮并添加到控制面板
-        self.pauseButton = QPushButton("暂停")
+        self.pauseButton = QPushButton("开始")
         self.pauseButton.clicked.connect(self.toggle_plot_and_simulation)
         control_layout.addWidget(self.pauseButton)
+        
+        # 初始状态设置为暂停
+        self.plot_widget.pause_plot()
         
         # 使用plot_tab现有的布局
         plot_tab_layout = self.plot_tab.layout()
@@ -141,8 +131,8 @@ class MainWindow(QMainWindow):
     def setup_default_values(self):
         """设置默认值"""
         # 设置默认波特率
-        self.baudrateCombo.setCurrentText("115200")
-        self.tgamBaudrateCombo.setCurrentText("115200")
+        self.baudrateCombo.setCurrentText("9600")
+        self.tgamBaudrateCombo.setCurrentText("9600")
         
         # 设置默认数据位
         self.databitsCombo.setCurrentText("8")
@@ -183,6 +173,10 @@ class MainWindow(QMainWindow):
         self.asciiRadio.currentTextChanged.connect(self.on_display_format_changed)
         self.autoWrapCheck.toggled.connect(self.on_auto_wrap_changed)
         self.showTimeCheck.toggled.connect(self.on_show_time_changed)
+        
+        # 将TGAM串口管理器的解析数据信号连接到绘图组件
+        self.tgam_serial_manager.parsed_data_received.connect(self.plot_widget.update_data)
+        self.receiver_serial_manager.parsed_data_received.connect(self.plot_widget.update_data)
     
     def refresh_receiver_ports(self):
         """刷新接收端端口列表"""
@@ -200,14 +194,16 @@ class MainWindow(QMainWindow):
         """同时切换绘图和TGAM模拟的暂停/恢复状态"""
         # 切换绘图状态
         self.plot_widget.toggle_pause()
-        
-        # 根据绘图状态切换模拟状态
-        if hasattr(self.plot_widget, 'is_paused') and self.plot_widget.is_paused:
-            # 如果绘图已暂停，则停止模拟
+
+        # 更新按钮文本
+        if self.plot_widget.is_paused:
+            self.pauseButton.setText("开始")
+            # 停止模拟
             if hasattr(self, 'tgam_simulator') and self.tgam_simulator.running:
                 self.stop_tgam_simulation()
         else:
-            # 如果绘图已恢复，则启动模拟
+            self.pauseButton.setText("暂停")
+            # 启动模拟
             if hasattr(self, 'tgam_simulator') and not self.tgam_simulator.running:
                 self.start_tgam_simulation()
     
@@ -361,7 +357,7 @@ class MainWindow(QMainWindow):
         
         print(f"接收到EEG数据: {parsed_data['eeg_uv']}")
         # 将数据传递给绘图组件
-        self.plot_widget.update_data(data_type, parsed_data)
+        self.plot_widget.update_data(parsed_data)
     
     def on_connection_error(self, error_msg):
         """处理连接错误"""
@@ -402,8 +398,7 @@ class MainWindow(QMainWindow):
     def save_plot_image(self):
         """保存绘图图像"""
         from PyQt5.QtWidgets import QFileDialog
-        from PyQt5.QtGui import QPixmap
-        
+
         # 获取文件名
         file_path, _ = QFileDialog.getSaveFileName(
             self, "保存图像", "eeg_plot.png", "PNG Files (*.png);;All Files (*)"

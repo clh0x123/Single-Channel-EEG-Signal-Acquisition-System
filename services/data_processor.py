@@ -1,15 +1,9 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-"""
-数据处理模块
-负责处理和分析EEG数据
-"""
-
-from typing import Dict, Any, List
-from collections import deque
-import numpy as np
 import time
 from abc import ABC, abstractmethod
+from collections import deque
+from typing import Dict, Any, List
+
+import numpy as np
 
 
 class IDataProcessor(ABC):
@@ -44,7 +38,6 @@ class IDataProcessor(ABC):
 
 class RawEEGProcessor(IDataProcessor):
     """原始EEG数据处理器"""
-    
     def __init__(self, max_buffer_size=1000):
         """初始化原始EEG数据处理器
         
@@ -299,7 +292,6 @@ class DataProcessorManager:
             processor.clear_buffer()
 
 
-# 简单的测试函数
 if __name__ == "__main__":
     manager = DataProcessorManager()
     

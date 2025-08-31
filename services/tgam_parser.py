@@ -1,10 +1,3 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-"""
-TGAM数据流解析器
-用于解析TGAM芯片发送的脑电数据
-"""
-
 from typing import List, Dict, Any
 import logging
 

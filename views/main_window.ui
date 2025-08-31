@@ -518,42 +518,7 @@
     </item>
    </layout>
   </widget>
-  <widget class="QMenuBar" name="menubar">
-   <property name="geometry">
-    <rect>
-     <x>0</x>
-     <y>0</y>
-     <width>900</width>
-     <height>22</height>
-    </rect>
-   </property>
-   <widget class="QMenu" name="menu">
-    <property name="title">
-     <string>文件(F)</string>
-    </property>
-    <addaction name="actionOpen"/>
-    <addaction name="actionSave"/>
-   </widget>
-   <widget class="QMenu" name="menu_1">
-    <property name="title">
-     <string>帮助(H)</string>
-    </property>
-    <addaction name="actionAbout"/>
-   </widget>
-   <addaction name="menu"/>
-   <addaction name="menu_1"/>
-  </widget>
   <widget class="QStatusBar" name="statusbar"/>
-  <action name="actionOpen">
-   <property name="text">
-    <string>打开</string>
-   </property>
-  </action>
-  <action name="actionSave">
-   <property name="text">
-    <string>保存</string>
-   </property>
-  </action>
   <action name="actionRefresh">
    <property name="text">
     <string>刷新接收端端口</string>
@@ -564,11 +529,7 @@
     <string>刷新TGAM端口</string>
    </property>
   </action>
-  <action name="actionAbout">
-   <property name="text">
-    <string>关于</string>
-   </property>
-  </action>
+
  </widget>
  <resources/>
  <connections/>

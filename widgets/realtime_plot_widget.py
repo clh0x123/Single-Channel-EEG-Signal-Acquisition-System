@@ -96,30 +96,31 @@ class RealtimePlotWidget(QWidget):
         else:
             self.pause_plot()
     
-    def update_data(self, data_type, data):
+    def update_data(self, data):
         """更新数据
         从SerialManager接收解析后的数据并添加到绘图中
         
         Args:
-            data_type: 数据类型
-            data: 数据内容
+            data: 解析后的数据字典
         """
-        # 这里处理来自SerialManager的parsed_data_received信号
         # 确保数据是有效的
         if data is None:
             return
             
+        # 检查数据类型
+        data_type = data.get('type', 'unknown')
+        
         # 根据数据类型处理
-        if (data_type == 'eeg' or data_type == 'raw_eeg') and isinstance(data, dict) and 'eeg_uv' in data:
+        if data_type in ['eeg', 'raw_eeg'] and 'eeg_uv' in data:
             # 添加EEG数据点
             self.add_data_point(data['eeg_uv'])
-        elif data_type == 'signal_quality' and isinstance(data, dict) and 'quality' in data:
+        elif data_type == 'signal_quality' and 'quality' in data:
             # 可以在这里添加信号质量的显示逻辑
             pass
-        elif data_type in ['attention', 'meditation'] and isinstance(data, dict) and data_type in data:
+        elif data_type in ['attention', 'meditation'] and data_type in data:
             # 可以在这里添加注意力/冥想值的显示逻辑
             pass
-        elif isinstance(data, dict) and 'eeg_uv' in data:
+        elif 'eeg_uv' in data:
             # 兼容旧的数据格式
             self.add_data_point(data['eeg_uv'])
         elif data_type == 'raw_eeg' and isinstance(data, (int, float)):

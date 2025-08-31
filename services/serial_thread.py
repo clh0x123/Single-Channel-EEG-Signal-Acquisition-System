@@ -1,16 +1,13 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-"""
-串口通信线程模块
-负责处理串口数据的接收和发送
-"""
-
 import time
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, pyqtSlot
+
 import serial
+from PyQt5.QtCore import QThread, pyqtSignal
+
 
 class SerialThread(QThread):
-    """串口数据接收线程"""
+    """
+    串口通信线程模块，负责处理串口数据的接收和发送
+    """
     data_received = pyqtSignal(bytes)
     connection_error = pyqtSignal(str)
     port_closed = pyqtSignal()
