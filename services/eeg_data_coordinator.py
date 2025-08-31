@@ -3,9 +3,11 @@ EEG数据协调器
 负责协调频段处理器和绘图组件之间的数据流
 """
 from typing import Dict, Any, List, Optional
-from PyQt5.QtCore import QObject, pyqtSignal
+from PyQt5.QtCore import QObject, pyqtSignal, QTimer
+from collections import deque
+import numpy as np
 
-from .frequency_band_processor import FrequencyBandProcessor
+from services.frequency_band_processor import FrequencyBandProcessor
 from .data_processor import DataProcessorManager
 
 
@@ -16,6 +18,7 @@ class EEGDataCoordinator(QObject):
     raw_eeg_updated = pyqtSignal(float)  # 原始EEG数据更新
     frequency_bands_updated = pyqtSignal(dict)  # 频段数据更新
     combined_data_updated = pyqtSignal(dict)  # 组合数据更新
+    processed_data_available = pyqtSignal(dict)  # 处理后的数据可用信号
     
     def __init__(self, sample_rate: int = 512, buffer_size: int = 1000):
         super().__init__()
@@ -23,7 +26,7 @@ class EEGDataCoordinator(QObject):
         self.buffer_size = buffer_size
         
         # 初始化处理器
-        self.frequency_band_processor = FrequencyBandProcessor(sample_rate, buffer_size)
+        self.frequency_band_processor = FrequencyBandProcessor(sample_rate)
         self.data_processor_manager = DataProcessorManager()
         
         # 数据缓存
@@ -32,6 +35,22 @@ class EEGDataCoordinator(QObject):
         self.latest_attention = 0
         self.latest_meditation = 0
         self.latest_signal_quality = 0
+        
+        # 数据缓冲区
+        self.raw_eeg_buffer = deque(maxlen=buffer_size)
+        self.eeg_uv_buffer = deque(maxlen=buffer_size)
+        
+        # 状态变量
+        self.is_processing = True
+        
+        # 处理定时器 - 增加处理频率以提高频段数据更新速度
+        self.processing_timer = QTimer(self)
+        self.processing_timer.timeout.connect(self.process_buffer_data)
+        self.processing_timer.start(100)  # 每100ms处理一次（10Hz）
+        
+        # 用于累积数据的临时缓冲区
+        self.temp_buffer = []
+        self.temp_buffer_size = 64  # 每处理64个数据点进行一次频段分析
         
     def process_eeg_data(self, eeg_data: Dict[str, Any]) -> Dict[str, Any]:
         """处理EEG数据
@@ -52,21 +71,25 @@ class EEGDataCoordinator(QObject):
             eeg_value = float(eeg_data['eeg_uv'])
             self.latest_raw_eeg = eeg_value
             
-            # 发送原始EEG信号
+            # 添加到缓冲区
+            self.raw_eeg_buffer.append(eeg_value)
+            self.eeg_uv_buffer.append(eeg_value)
+            
+            # 添加到临时缓冲区用于频段分析
+            self.temp_buffer.append(eeg_value)
+            
+            # 如果临时缓冲区达到指定大小，立即处理频段数据
+            if len(self.temp_buffer) >= self.temp_buffer_size:
+                self._process_band_data()
+            
+            # 发射原始EEG数据信号
             self.raw_eeg_updated.emit(eeg_value)
-            
-            # 添加到频段处理器
-            self.frequency_band_processor.add_eeg_data(eeg_value)
-            
-            # 获取频段数据
-            frequency_bands = self.frequency_band_processor.get_latest_frequency_band_data()
-            self.latest_frequency_bands = frequency_bands
-            
-            # 发送频段数据
-            self.frequency_bands_updated.emit(frequency_bands)
+            self.processed_data_available.emit({
+                'eeg_raw': eeg_value,
+                'eeg_uv': eeg_value
+            })
             
             result['raw_eeg'] = eeg_value
-            result['frequency_bands'] = frequency_bands
         
         # 处理其他类型的数据
         if 'attention' in eeg_data:
@@ -90,6 +113,65 @@ class EEGDataCoordinator(QObject):
         self.combined_data_updated.emit(result)
         
         return result
+        
+    def _process_band_data(self):
+        """处理临时缓冲区中的数据以生成频段信息"""
+        if not self.is_processing or len(self.temp_buffer) < self.temp_buffer_size:
+            return
+            
+        # 提取临时缓冲区中的数据
+        eeg_data = np.array(self.temp_buffer)
+        
+        # 向频段处理器添加数据
+        for value in eeg_data:
+            self.frequency_band_processor.add_eeg_data(value)
+        
+        # 获取最新的频段数据
+        band_powers = self.frequency_band_processor.get_latest_frequency_band_data()
+        self.latest_frequency_bands = band_powers
+        
+        # 清空临时缓冲区
+        self.temp_buffer = []
+        
+        # 发送频段数据
+        self.frequency_bands_updated.emit(band_powers)
+        
+        # 发射包含频段信息的数据信号
+        self.processed_data_available.emit({
+            'frequency_bands': band_powers,
+            'eeg_uv': self.eeg_uv_buffer[-1] if self.eeg_uv_buffer else 0
+        })
+        
+    def process_buffer_data(self):
+        """处理缓冲区中的数据以生成频段信息 - 作为备用机制"""
+        if not self.is_processing:
+            return
+            
+        # 如果临时缓冲区不为空，也进行处理
+        if len(self.temp_buffer) > 0:
+            self._process_band_data()
+            
+    def start_processing(self):
+        """开始处理数据"""
+        self.is_processing = True
+        
+    def stop_processing(self):
+        """停止处理数据"""
+        self.is_processing = False
+        
+    def clear_buffers(self):
+        """清空所有数据缓冲区"""
+        self.raw_eeg_buffer.clear()
+        self.eeg_uv_buffer.clear()
+        self.temp_buffer = []
+        
+    def set_temp_buffer_size(self, size):
+        """设置临时缓冲区大小
+        
+        Args:
+            size: 新的缓冲区大小
+        """
+        self.temp_buffer_size = max(16, min(size, 256))  # 限制在合理范围内
     
     def get_latest_raw_eeg(self) -> float:
         """获取最新的原始EEG数据

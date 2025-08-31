@@ -2,10 +2,11 @@
 组合EEG绘图组件
 将原始EEG信号和频段信号整合在一张图中显示
 """
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel
-from PyQt5.QtCore import QTimer, pyqtSignal
-from PyQt5.QtGui import QIcon
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel
+from PyQt5.QtCore import QTimer, pyqtSignal, Qt
+from PyQt5.QtGui import QColor
 import pyqtgraph as pg
+import numpy as np
 from collections import deque
 
 
@@ -15,98 +16,173 @@ class CombinedEEGPlotWidget(QWidget):
     # 信号定义
     data_updated = pyqtSignal(dict)  # 数据更新信号
     
-    def __init__(self, parent=None, max_points=1000):
+    def __init__(self, parent=None, max_points=5000):
         super().__init__(parent)
         self.max_points = max_points
         
-        # 数据缓冲区
-        self.time_buffer = deque(maxlen=max_points)
+        # 原始EEG数据缓冲区
         self.raw_eeg_buffer = deque(maxlen=max_points)
+        self.raw_time_buffer = deque(maxlen=max_points)
+
+        # 缓冲区大小设置
+        self.MAX_BAND_BUFFER_SIZE = max_points  # 频段数据缓冲区与原始EEG数据缓冲区大小相同
+        
         
         # 频段配置
         self.frequency_bands = {
-            'delta': {'name': 'δ (Delta)', 'color': 'black', 'range': (0.5, 4.0)},
-            'theta': {'name': 'θ (Theta)', 'color': 'yellow', 'range': (4.0, 8.0)},
-            'alpha_low': {'name': 'α↑ (Alpha上升)', 'color': 'magenta', 'range': (8.0, 10.0)},
-            'alpha_high': {'name': 'α↓ (Alpha下降)', 'color': 'darkblue', 'range': (10.0, 13.0)},
-            'beta_low': {'name': 'β↑ (Beta上升)', 'color': 'cyan', 'range': (13.0, 20.0)},
-            'beta_high': {'name': 'β↓ (Beta下降)', 'color': 'purple', 'range': (20.0, 30.0)},
-            'gamma_low': {'name': 'γ↓ (Gamma下降)', 'color': 'darkgreen', 'range': (30.0, 50.0)},
-            'gamma_high': {'name': 'γ- (Gamma负)', 'color': 'darkred', 'range': (50.0, 100.0)}
-        }
+        'raw': {'name': 'raw', 'color': 'red', 'range': (0, 100)},
+        'delta': {'name': 'δ', 'color': 'black', 'range': (0.5, 4.0)},
+        'alpha_low': {'name': 'α↑', 'color': 'magenta', 'range': (8.0, 10.0)},
+        'alpha_high': {'name': 'α↓', 'color': 'darkblue', 'range': (10.0, 13.0)},
+        'beta_low': {'name': 'β↑', 'color': 'cyan', 'range': (13.0, 20.0)},
+        'beta_high': {'name': 'β↓', 'color': 'purple', 'range': (20.0, 30.0)},
+        'gamma_low': {'name': 'γ↓', 'color': 'darkgreen', 'range': (30.0, 50.0)},
+        'gamma_high': {'name': 'γ-', 'color': 'darkred', 'range': (50.0, 100.0)},
+        'theta': {'name': 'θ', 'color': 'yellow', 'range': (4.0, 8.0)}
+    }
+
+        # 确保频段数据缓冲区与原始EEG数据缓冲区大小相同
+        self.MAX_BAND_BUFFER_SIZE = max_points
         
         # 频段数据缓冲区
+        self.band_time_buffers = {band: deque(maxlen=max_points) for band in self.frequency_bands.keys()}
         self.band_data_buffers = {band: deque(maxlen=max_points) for band in self.frequency_bands.keys()}
         
-        # 绘图曲线
-        self.raw_eeg_curve = None
-        self.band_curves = {}
+        # 绘图窗口和曲线
+        self.plot_widgets = {}
+        self.curves = {}
         
         # 状态变量
         self.current_time = 0
         self.is_paused = False
         
+        # 采样率设置
+        self.sample_rate = 512  # 默认512Hz
+        self.time_increment = 1.0 / self.sample_rate
+        
         # 可见性控制
-        self.raw_eeg_visible = True
         self.band_visibility = {band: True for band in self.frequency_bands.keys()}
         
         self.setup_ui()
         self.setup_timer()
         self.setup_connections()
         
+    def set_sample_rate(self, sample_rate):
+        """设置采样率
+        
+        Args:
+            sample_rate: 新的采样率值
+        """
+        self.sample_rate = sample_rate
+        self.time_increment = 1.0 / self.sample_rate
+        
     def setup_ui(self):
-        """设置UI界面"""
+        """设置UI界面 - 按照图片中的样式精确设计"""
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
         
-        # 创建绘图窗口
-        self.plot_widget = pg.PlotWidget()
-        self.plot_widget.setBackground('white')
-        self.plot_widget.setLabel('left', 'Amplitude (μV)', color='black', size='12pt')
-        self.plot_widget.setLabel('bottom', 'Time (s)', color='black', size='12pt')
-        self.plot_widget.setTitle('EEG信号与频段分析', color='black', size='14pt')
+        # 设置背景颜色
+        bg_color = '#d9d9d9'  # 浅灰色背景
+        plot_bg_color = '#ffffff'  # 白色绘图区域背景
         
-        # 设置网格
-        self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
+        # 排列频段
+        display_order = ['raw', 'delta', 'alpha_low', 'alpha_high', 'beta_low', 'beta_high', 'gamma_low', 'gamma_high', 'theta']
         
-        # 设置Y轴范围
-        self.plot_widget.setYRange(-100, 100)
-        
-        # 创建原始EEG信号曲线
-        self.raw_eeg_curve = self.plot_widget.plot(pen=pg.mkPen(color='red', width=2), name='raw (原始EEG信号)')
-        
-        # 创建各频段的绘图曲线
-        for band_name, band_info in self.frequency_bands.items():
+        # 为每个频段创建单独的绘图窗口
+        for band_name in display_order:
+            if band_name not in self.frequency_bands:
+                continue
+                
+            band_info = self.frequency_bands[band_name]
+            
+            # 创建包含绘图窗口和标签的容器
+            plot_container = QWidget()
+            plot_container.setStyleSheet(f"background-color: {bg_color};")
+            plot_container_layout = QHBoxLayout(plot_container)
+            plot_container_layout.setContentsMargins(0, 0, 0, 0)
+            plot_container_layout.setSpacing(0)
+            
+            # 添加频段名称标签，右侧对齐
+            band_label = QLabel(band_info['name'])
+            band_label.setStyleSheet("color: black; font-weight: bold; font-size: 12pt; padding-right: 10px;")
+            band_label.setFixedWidth(60)  # 增加标签宽度以确保显示完全
+            band_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            plot_container_layout.addWidget(band_label)
+            
+            # 创建绘图窗口
+            plot_widget = pg.PlotWidget()
+            plot_widget.setBackground(plot_bg_color)
+            
+            # 设置无边框样式
+            plot_widget.setStyleSheet("border: none;")
+            
+            # 移除坐标轴标签和标题
+            plot_widget.hideAxis('left')
+            plot_widget.hideAxis('bottom')
+            plot_widget.setTitle('')
+            
+            # 禁用网格
+            plot_widget.showGrid(x=False, y=False)
+            
+            # 设置Y轴范围 - 按照图片样式设置
+            if band_name == 'raw':
+                plot_widget.setYRange(-100, 100)
+            else:
+                plot_widget.setYRange(-50, 50)
+            
+            # 创建曲线，设置合适的线宽
             color = band_info['color']
-            pen = pg.mkPen(color=color, width=1.5)
-            self.band_curves[band_name] = self.plot_widget.plot(pen=pen, name=band_info['name'])
-        
-        # 添加图例
-        legend = self.plot_widget.addLegend()
-        legend.addItem(self.raw_eeg_curve, 'raw (原始EEG信号)')
-        for band_name, band_info in self.frequency_bands.items():
-            legend.addItem(self.band_curves[band_name], band_info['name'])
-        
-        layout.addWidget(self.plot_widget)
-        
-        # 控制按钮
-        self.setup_control_buttons(layout)
-        
-    def setup_control_buttons(self, parent_layout):
-        """设置控制按钮"""
-        # 移除了重复的按钮，将由主窗口统一控制
-        pass
+            line_width = 2.0 if band_name == 'raw' else 1.5
+            pen = pg.mkPen(color=color, width=line_width, cosmetic=True)
+            curve = plot_widget.plot(pen=pen)
+            
+            # 存储绘图窗口和曲线
+            self.plot_widgets[band_name] = plot_widget
+            self.curves[band_name] = curve
+            
+            # 添加绘图窗口到容器，占用大部分空间
+            plot_container_layout.addWidget(plot_widget, 1)
+            
+            # 添加容器到主布局
+            layout.addWidget(plot_container)
+            
+            # 添加分割线（除了最后一个）
+            if band_name != display_order[-1]:
+                separator = QWidget()
+                separator.setStyleSheet("background-color: #b0b0b0;")
+                separator.setFixedHeight(1)
+                layout.addWidget(separator)
         
     def setup_timer(self):
         """设置更新定时器"""
         self.update_timer = QTimer()
         self.update_timer.timeout.connect(self.update_plot)
-        self.update_timer.start(50)  # 20Hz更新频率
+        self.update_timer.start(30)  # 约33Hz更新频率，提高响应速度
         
     def setup_connections(self):
         """设置信号连接"""
         # 连接数据更新信号
         self.data_updated.connect(self.process_data_update)
+        # 连接数据更新信号到自动缩放方法
+        self.data_updated.connect(self.on_data_updated)
         
+    def update_raw_eeg(self, eeg_value):
+        """更新原始EEG数据
+        
+        Args:
+            eeg_value: 新的EEG值
+        """
+        if self.is_paused:
+            return
+
+        # 更新当前时间
+        self.current_time += self.time_increment
+
+        # 添加原始EEG数据
+        self.raw_eeg_buffer.append(float(eeg_value))
+        self.raw_time_buffer.append(self.current_time)
+
     def process_data_update(self, data: dict):
         """处理数据更新
         
@@ -116,29 +192,32 @@ class CombinedEEGPlotWidget(QWidget):
         if not data or self.is_paused:
             return
             
-        # 更新原始EEG信号
-        if 'eeg_uv' in data:
-            self.raw_eeg_buffer.append(float(data['eeg_uv']))
-            self.time_buffer.append(self.current_time)
-            self.current_time += 0.01  # 假设采样率为100Hz
+        # 更新当前时间
+        self.current_time += self.time_increment
+        
+        
+        # 更新原始EEG数据
+        if 'eeg_raw' in data:
+            eeg_value = data['eeg_raw']
+            self.raw_eeg_buffer.append(float(eeg_value))
+            self.raw_time_buffer.append(self.current_time)
         
         # 更新频段信号
         if 'frequency_bands' in data:
             band_data = data['frequency_bands']
             for band_name, value in band_data.items():
                 if band_name in self.band_data_buffers:
+                    # 频段数据添加逻辑
+                    # 根据TGAM数据流格式说明，原始EEG数据1秒有512个点，而频段数据只有1个点
+                    # 所以我们只需要添加一个点，而不是与原始数据相同数量的点
                     self.band_data_buffers[band_name].append(float(value))
-    
-    def update_raw_eeg(self, eeg_value: float):
-        """更新原始EEG信号
+                    self.band_time_buffers[band_name].append(self.current_time)
+                    
+                    # 维护缓冲区大小，确保不会占用过多内存
+                    if len(self.band_data_buffers[band_name]) > self.MAX_BAND_BUFFER_SIZE:
+                        self.band_data_buffers[band_name].pop(0)
+                        self.band_time_buffers[band_name].pop(0)
         
-        Args:
-            eeg_value: EEG信号值
-        """
-        if not self.is_paused:
-            self.raw_eeg_buffer.append(float(eeg_value))
-            self.time_buffer.append(self.current_time)
-            self.current_time += 0.01  # 假设采样率为100Hz
         
     def update_frequency_bands(self, band_data: dict):
         """更新频段信号数据
@@ -147,57 +226,74 @@ class CombinedEEGPlotWidget(QWidget):
             band_data: 频段信号数据字典
         """
         if not self.is_paused:
+            # 频段数据应该与最近的原始EEG数据时间戳同步
+            if self.raw_time_buffer:
+                current_time = self.raw_time_buffer[-1]
+            else:
+                current_time = self.current_time
+                self.current_time += self.time_increment
+            
             for band_name, value in band_data.items():
                 if band_name in self.band_data_buffers:
+                    # 将频段数据添加到缓冲区，使用与原始EEG相同的时间戳
                     self.band_data_buffers[band_name].append(float(value))
+                    self.band_time_buffers[band_name].append(current_time)
+                    
+                    # 维护缓冲区大小，确保不会占用过多内存
+                    if len(self.band_data_buffers[band_name]) > self.MAX_BAND_BUFFER_SIZE:
+                        self.band_data_buffers[band_name].pop(0)
+                        self.band_time_buffers[band_name].pop(0)
         
     def update_plot(self):
-        """更新绘图"""
-        if len(self.time_buffer) < 2:
+        """更新所有绘图"""
+        if self.is_paused:
             return
-            
-        x_data = list(self.time_buffer)
-        
-        # 更新原始EEG信号曲线
-        if len(self.raw_eeg_buffer) > 0 and self.raw_eeg_visible:
-            self.raw_eeg_curve.setData(x_data[-len(self.raw_eeg_buffer):], list(self.raw_eeg_buffer))
-        elif not self.raw_eeg_visible:
-            self.raw_eeg_curve.setData([], [])
-        
+
+        # 更新原始EEG曲线
+        if 'raw' in self.curves and len(self.raw_eeg_buffer) > 1:
+            # 获取原始EEG数据和时间戳
+            raw_time = list(self.raw_time_buffer)
+            raw_data = list(self.raw_eeg_buffer)
+
+            # 更新曲线
+            self.curves['raw'].setData(raw_time, raw_data)
+
+            # 同步X轴范围
+            if len(raw_time) > 0:
+                self.plot_widgets['raw'].setXRange(raw_time[0], raw_time[-1] + 1)
+
         # 更新各频段的曲线
-        for band_name, curve in self.band_curves.items():
-            if band_name in self.band_data_buffers and self.band_visibility.get(band_name, True):
-                y_data = list(self.band_data_buffers[band_name])
-                if len(y_data) > 0:
-                    curve.setData(x_data[-len(y_data):], y_data)
-            elif band_name in self.band_visibility and not self.band_visibility[band_name]:
-                curve.setData([], [])
-        
-        # 自动调整X轴范围
-        self.plot_widget.setXRange(max(0, x_data[-1] - 10), x_data[-1] + 1)
+        for band_name in self.frequency_bands.keys():
+            if band_name != 'raw' and len(self.band_data_buffers[band_name]) > 1:
+                # 获取频段数据和时间戳
+                band_time = list(self.band_time_buffers[band_name])
+                band_data = list(self.band_data_buffers[band_name])
+                
+                # 更新曲线
+                self.curves[band_name].setData(band_time, band_data)
+                
+                # 同步X轴范围
+                if len(band_time) > 0:
+                    self.plot_widgets[band_name].setXRange(band_time[0], band_time[-1] + 1)
         
     def clear_all_plots(self):
         """清空所有图表"""
-        self.time_buffer.clear()
+        # 清空原始EEG数据缓冲区
         self.raw_eeg_buffer.clear()
-        for band_data in self.band_data_buffers.values():
-            band_data.clear()
+        self.raw_time_buffer.clear()
+
+        # 清空所有频段数据缓冲区
+        for band_name in self.frequency_bands.keys():
+            if band_name in self.band_time_buffers:
+                self.band_time_buffers[band_name].clear()
+                self.band_data_buffers[band_name].clear()
         
-        self.raw_eeg_curve.setData([], [])
-        for curve in self.band_curves.values():
+        # 清除所有曲线数据
+        for curve in self.curves.values():
             curve.setData([], [])
+            
 
-    def set_raw_eeg_visibility(self, visible):
-        """设置原始EEG信号的可见性
         
-        Args:
-            visible: 是否可见
-        """
-        self.raw_eeg_visible = visible
-        if not visible:
-            self.raw_eeg_curve.setData([], [])
-        self.update_plot()
-
     def set_band_visibility(self, band_name, visible):
         """设置特定频段的可见性
         
@@ -207,8 +303,8 @@ class CombinedEEGPlotWidget(QWidget):
         """
         if band_name in self.band_visibility:
             self.band_visibility[band_name] = visible
-            if not visible and band_name in self.band_curves:
-                self.band_curves[band_name].setData([], [])
+            if not visible and band_name in self.curves:
+                self.curves[band_name].setData([], [])
             self.update_plot()
 
     def get_band_names(self):
@@ -230,8 +326,15 @@ class CombinedEEGPlotWidget(QWidget):
         """
         return self.frequency_bands.get(band_name, {})
         
+    
+        return self.is_paused
+
     def toggle_pause_all(self):
-        """切换所有图表的暂停/恢复状态"""
+        """切换所有图表的暂停/继续状态
+        
+        Returns:
+            bool: 切换后的暂停状态
+        """
         self.is_paused = not self.is_paused
         return self.is_paused
     
@@ -265,14 +368,56 @@ class CombinedEEGPlotWidget(QWidget):
         
         return stats
         
-    def set_y_range(self, min_val: float, max_val: float):
+    def set_y_range(self, min_val: float, max_val: float, band_name=None):
         """设置图表的Y轴范围
         
         Args:
             min_val: 最小值
             max_val: 最大值
+            band_name: 可选，指定要设置的频段名称，None表示设置所有频段
         """
-        self.plot_widget.setYRange(min_val, max_val)
+        if band_name:
+            if band_name in self.plot_widgets:
+                self.plot_widgets[band_name].setYRange(min_val, max_val)
+        else:
+            for plot_widget in self.plot_widgets.values():
+                plot_widget.setYRange(min_val, max_val)
+
+    def auto_scale_y(self, band_name=None, scale_factor=1.1):
+        """自动调整Y轴范围以适应数据
+        
+        Args:
+            band_name: 可选，指定要调整的频段名称，None表示调整所有频段
+            scale_factor: 缩放因子，默认为1.2，值越大波形显示越宽松
+        """
+        if band_name:
+            if band_name in self.band_data_buffers and self.band_data_buffers[band_name]:
+                data = list(self.band_data_buffers[band_name])
+                min_val = min(data) * scale_factor
+                max_val = max(data) * scale_factor
+                # 确保Y轴范围包含0点，使波形居中显示
+                min_val = min(min_val, 0)
+                max_val = max(max_val, 0)
+                self.plot_widgets[band_name].setYRange(min_val, max_val)
+        else:
+            # 调整所有频段
+            for band in self.band_data_buffers:
+                if band in self.plot_widgets and self.band_data_buffers[band]:
+                    data = list(self.band_data_buffers[band])
+                    min_val = min(data) * scale_factor
+                    max_val = max(data) * scale_factor
+                    # 确保Y轴范围包含0点，使波形居中显示
+                    min_val = min(min_val, 0)
+                    max_val = max(max_val, 0)
+                    self.plot_widgets[band].setYRange(min_val, max_val)
+
+    def on_data_updated(self):
+        """数据更新后自动调用的方法"""
+        # 每收到一定量的数据后自动缩放一次
+        # 检查任意一个频段的数据长度
+        any_band_has_data = any(len(buffer) > 0 for buffer in self.band_data_buffers.values())
+        if any_band_has_data and len(next(iter(self.band_data_buffers.values()))) % 100 == 0:
+            self.auto_scale_y()
         
     def set_max_points(self, max_points: int):
         """设置最大数据点数
@@ -280,6 +425,14 @@ class CombinedEEGPlotWidget(QWidget):
         Args:
             max_points: 最大点数
         """
+        # 验证输入值
+        if not isinstance(max_points, int) or max_points <= 0:
+            raise ValueError("max_points必须是正整数")
+            
         self.max_points = max_points
-        # 注意：这里需要重新创建子组件来应用新的max_points
-        # 或者添加方法来动态调整缓冲区大小
+        
+        # 更新所有频段的缓冲区大小
+        for band_name in self.frequency_bands.keys():
+            if band_name in self.band_time_buffers:
+                self.band_time_buffers[band_name] = deque(list(self.band_time_buffers[band_name]), maxlen=max_points)
+                self.band_data_buffers[band_name] = deque(list(self.band_data_buffers[band_name]), maxlen=max_points)

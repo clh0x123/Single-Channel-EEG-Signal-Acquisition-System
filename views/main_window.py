@@ -83,12 +83,16 @@ class MainWindow(QMainWindow):
         self.yRangeButton = QPushButton("调整Y轴范围")
         self.yRangeButton.clicked.connect(self.adjust_y_range)
         
+        self.autoScaleButton = QPushButton("自动缩放Y轴")
+        self.autoScaleButton.clicked.connect(self.plot_widget.auto_scale_y)
+        
         self.savePlotButton = QPushButton("保存图像")
         self.savePlotButton.clicked.connect(self.save_plot_image)
         
         # 添加到控制面板
         control_layout.addWidget(self.clearPlotButton)
         control_layout.addWidget(self.yRangeButton)
+        control_layout.addWidget(self.autoScaleButton)
         control_layout.addWidget(self.savePlotButton)
         
         # 创建暂停按钮并添加到控制面板
@@ -125,13 +129,6 @@ class MainWindow(QMainWindow):
 
         # 创建可见性控制布局
         visibility_layout = QHBoxLayout()
-        
-        # 添加原始EEG信号可见性控制
-        self.raw_eeg_checkbox = QPushButton("原始EEG")
-        self.raw_eeg_checkbox.setCheckable(True)
-        self.raw_eeg_checkbox.setChecked(True)
-        self.raw_eeg_checkbox.clicked.connect(self.toggle_raw_eeg_visibility)
-        visibility_layout.addWidget(self.raw_eeg_checkbox)
         
         # 添加各频段可见性控制
         self.band_checkboxes = {}
@@ -475,36 +472,7 @@ class MainWindow(QMainWindow):
             if ok2:
                 self.plot_widget.set_y_range(min_val, max_val)
         
-    def toggle_raw_eeg_visibility(self):
-        """切换原始EEG信号的可见性"""
-        visible = self.raw_eeg_checkbox.isChecked()
-        self.plot_widget.set_raw_eeg_visibility(visible)
 
-    def start_tgam_simulation(self):
-        """开始TGAM模拟"""
-        if self.tgam_serial_manager.is_connected():
-            if self.tgam_simulator.start():
-                self.receiveText.append("开始TGAM模拟")
-                # 更新切换按钮状态
-                self.update_toggle_button_state()
-                # 如果绘图是暂停状态，自动开始
-                if hasattr(self.plot_widget, 'is_paused') and self.plot_widget.is_paused:
-                    self.toggle_plot_and_simulation()
-            else:
-                self.receiveText.append("TGAM模拟启动失败")
-        else:
-            self.receiveText.append("请先打开TGAM串口")
-
-    def stop_tgam_simulation(self):
-        """停止TGAM模拟"""
-        self.tgam_simulator.stop()
-        self.receiveText.append("停止TGAM模拟")
-        # 更新切换按钮状态
-        self.update_toggle_button_state()
-        # 如果绘图不是暂停状态，自动暂停
-        if hasattr(self.plot_widget, 'is_paused') and not self.plot_widget.is_paused:
-            self.toggle_plot_and_simulation()
-        
     def toggle_band_visibility(self, band_name, visible):
         """切换特定频段的可见性
         
